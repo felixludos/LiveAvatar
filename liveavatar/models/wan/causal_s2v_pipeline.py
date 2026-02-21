@@ -5,6 +5,7 @@ import math
 import os
 import random
 import sys
+import time
 import types
 from contextlib import contextmanager
 from copy import deepcopy
@@ -153,10 +154,13 @@ class WanS2V:
 
         logging.info(f"Creating WanModel from {checkpoint_dir}")
         if not dit_fsdp:
+            # Load to CPU when init_on_cpu is True to avoid OOM during initialization
+            load_device = "cpu" if self.init_on_cpu else self.device
+            logging.info(f"Loading model to device: {load_device}")
             self.noise_model = CausalWanModel_S2V.from_pretrained(
                 checkpoint_dir,
                 torch_dtype=self.param_dtype,
-                device_map=self.device)
+                device_map=load_device)
         else:
             self.noise_model = CausalWanModel_S2V.from_pretrained(
                 checkpoint_dir, torch_dtype=self.param_dtype)
@@ -978,7 +982,8 @@ class WanS2V:
                     else:
                         self.shared_cond_cache = None
                     
-                    for gpu_id in range(4):
+                    # Initialize KV caches for each sampling timestep
+                    for gpu_id in range(sampling_steps):
                         self._initialize_kv_cache(
                             batch_size=1,
                             dtype=self.param_dtype,
@@ -1106,10 +1111,28 @@ class WanS2V:
                 if r == 0 and enable_online_decode:
                     if offload_model:
                         print(f"offloading model to cpu, please wait...")
+                        # Clear all cached tensors before offloading
+                        torch.cuda.empty_cache()
+                        gc.collect()
+                        
+                        # Move model to CPU
                         self.noise_model.cpu()
+                        torch.cuda.synchronize()
+                        
+                        # Aggressively clear memory multiple times
+                        torch.cuda.empty_cache()
+                        gc.collect()
+                        torch.cuda.empty_cache()
+                        
+                        # Wait for memory to actually clear
+                        time.sleep(1)
+                        
+                        print(f"model offloaded, loading VAE...")
                         self.vae.model.to(self.device)
                         torch.cuda.synchronize()
                         torch.cuda.empty_cache()
+                        print(f"VAE loaded, starting decode...")
+                    
                     ref_latents = clip_output.unsqueeze(0)[:, :, 0:1]
                     decode_latents = torch.cat(
                         [motion_latents, clip_output.unsqueeze(0)], dim=2
@@ -1133,13 +1156,24 @@ class WanS2V:
                         self.vae.encode(videos_last_frames)
                     ).type_as(clip_latents[0])
                     out.append(image.cpu())
+                    
+                    # Clean up decode tensors
+                    del decode_latents, image
+                    
                     if offload_model:
+                        print(f"offloading VAE, reloading model...")
                         self.vae.model.cpu()
+                        torch.cuda.synchronize()
+                        torch.cuda.empty_cache()
+                        gc.collect()
+                        time.sleep(0.5)
                         self.noise_model.to(self.device)
                         torch.cuda.synchronize()
                         torch.cuda.empty_cache()
                 else:
                     clip_outputs.append(clip_output.detach().cpu())
+                    # Force memory cleanup after each clip to prevent OOM
+                    torch.cuda.empty_cache()
 
         #-------------------------------------- Step 3: full-video postprocess (deferred VAE decode for r>=1)--------------------------------------
         print(f"complete full-sequence generation")
@@ -1184,6 +1218,8 @@ class WanS2V:
                     self.vae.encode(videos_last_frames)
                 ).type_as(clip_output)
                 out.append(image.cpu())
+                # Force memory cleanup after each VAE decode to prevent OOM
+                torch.cuda.empty_cache()
 
         videos = torch.cat(out, dim=2)
         del clip_noise, clip_latents, clip_output, block_latents
