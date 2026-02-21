@@ -84,6 +84,22 @@ def flash_attention(
     assert dtype in half_dtypes
     assert q.device.type == 'cuda' and q.size(-1) <= 256
 
+    if not FLASH_ATTN_3_AVAILABLE and not FLASH_ATTN_2_AVAILABLE:
+        if q_lens is not None or k_lens is not None:
+            warnings.warn(
+                'Padding mask is disabled when using scaled_dot_product_attention. It can have a significant impact on performance.'
+            )
+        attn_mask = None
+
+        q_sdpa = q.transpose(1, 2).to(dtype)
+        k_sdpa = k.transpose(1, 2).to(dtype)
+        v_sdpa = v.transpose(1, 2).to(dtype)
+
+        out = torch.nn.functional.scaled_dot_product_attention(
+            q_sdpa, k_sdpa, v_sdpa, attn_mask=attn_mask, is_causal=causal, dropout_p=dropout_p)
+
+        return out.transpose(1, 2).contiguous().type(q.dtype)
+
     # params
     b, lq, lk, out_dtype = q.size(0), q.size(1), k.size(1), q.dtype
 
