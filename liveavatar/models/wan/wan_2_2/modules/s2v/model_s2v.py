@@ -81,6 +81,10 @@ def rope_apply(x, grid_sizes, freqs, start=None):
 @amp.autocast(enabled=False)
 @conditional_compile
 def rope_apply_cond(x, grid_sizes, freqs, start=None):
+    # Handle empty tensors (when conditional cache size is 0)
+    if x.size(1) == 0:
+        return x
+    
     n, c = x.size(2), x.size(3) // 2
     # loop over samples
     output = []
