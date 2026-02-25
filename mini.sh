@@ -17,7 +17,7 @@ CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES torchrun --nproc_per_node=1 --master_
      --infer_frames 48 \
      --load_lora \
      --lora_path_dmd "Quark-Vision/Live-Avatar" \
-     --sample_steps 8 \
+     --sample_steps 10 \
      --sample_guide_scale 0 \
      --num_clip 10 \
      --num_gpus_dit 1 \
@@ -28,8 +28,8 @@ CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES torchrun --nproc_per_node=1 --master_
      --offload_kv_cache \
      --t5_cpu
      # --lora_path_dmd "Quark-Vision/Live-Avatar" \
-     
 
+,
 # /mnt/c/Users/anwan/OneDrive/Khan/maity/vidLink/video_generators/multitalk/local_data/business_test2/right/s1.wav
 # /mnt/c/Users/anwan/OneDrive/Khan/maity/vidLink/local_data/avatars/business_man/right.png
 # "A corporate video where a handsome, middle-aged man uncrosses his arms and begins speaking directly to the camera with a friendly smile, gesturing naturally as he speaks confidently and clearly, conveying a sense of professionalism and approachability."
