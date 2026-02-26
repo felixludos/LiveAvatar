@@ -285,23 +285,50 @@ class CausalWanS2VSelfAttention(WanSelfAttention):
                     q, grid_sizes, freqs).type_as(v) #grid_sizes不参与计算
                 roped_key = causal_rope_apply(
                     k, grid_sizes, freqs).type_as(v)
+                
+
+                
+                # FIX: Ensure batch dimension exists - if roped_key is missing batch dim, add it
+                if roped_key.dim() == 3 and kv_cache['k'].dim() == 4:
+                    roped_key = roped_key.unsqueeze(0)
+                    if roped_query.dim() == 3:
+                        roped_query = roped_query.unsqueeze(0)
+                
                 seg_len_block = seg_idx[1]-seg_idx[0]
                 active_kv_cache_start = 0
-                if current_start >= kv_cache['k'].shape[1]:# for case current_start > kv_cache size, kv_rolling
-                    assert self.local_attn_size == -1, "local_attn_size should be -1 for streaming inference"
-                    current_start = current_start % kv_cache['k'].shape[1] 
-                    active_kv_cache_size = kv_cache['k'].shape[1]
-                    # active_cond_cache_size = seg_len_block//3 # only ref image, hard-code for case num_frames_per_block=3
+                cache_size = kv_cache['k'].shape[1]
+                
+                # Always wrap current_start to valid range first
+                current_start = current_start % cache_size
+                
+                # Check if assignment would exceed cache boundary
+                if current_start + seg_len_block > cache_size:
+                    # Handle circular buffer: split write across wrap point
+                    part1_len = cache_size - current_start
+                    part2_len = seg_len_block - part1_len
+                    
+                    # Write part 1 (to end of cache)
+                    if part1_len > 0:
+                        kv_cache["k"][:, current_start:cache_size] = roped_key[:, seg_idx[0]:(seg_idx[0]+part1_len)]
+                        kv_cache["v"][:, current_start:cache_size] = v[:, seg_idx[0]:(seg_idx[0]+part1_len)]
+                    
+                    # Write part 2 (wrap to beginning)
+                    if part2_len > 0:
+                        kv_cache["k"][:, 0:part2_len] = roped_key[:, (seg_idx[0]+part1_len):seg_idx[1]]
+                        kv_cache["v"][:, 0:part2_len] = v[:, (seg_idx[0]+part1_len):seg_idx[1]]
+                    
+                    active_kv_cache_size = cache_size
                     active_cond_cache_size = int(kv_cache["cond_end"])
                 else:
+                    # Normal write (no wrap needed)
+                    kv_cache["k"][:, current_start:(current_start+seg_len_block)] = roped_key[:,seg_idx[0]:seg_idx[1]]
+                    kv_cache["v"][:, current_start:(current_start+seg_len_block)] = v[:,seg_idx[0]:seg_idx[1]]
+                    
                     active_kv_cache_size = current_start+seg_len_block
                     if self.local_attn_size != -1:
                         # hard-code for case num_frames_per_block=3
                         active_kv_cache_start = max(0,active_kv_cache_size - self.local_attn_size * seg_len_block // 3)
                     active_cond_cache_size = int(kv_cache["cond_end"])
-
-                kv_cache["k"][:, current_start:(current_start+seg_len_block)] = roped_key[:,seg_idx[0]:seg_idx[1]]
-                kv_cache["v"][:, current_start:(current_start+seg_len_block)] = v[:,seg_idx[0]:seg_idx[1]]
                 x = attention(
                     q=roped_query[:,seg_idx[0]:seg_idx[1]],
                     k=torch.cat(

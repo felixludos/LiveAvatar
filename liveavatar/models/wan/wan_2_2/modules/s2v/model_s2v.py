@@ -70,7 +70,7 @@ def rope_apply(x, grid_sizes, freqs, start=None):
         s = x.size(1)
         x_i = torch.view_as_complex(x[i, :s].to(torch.float64).reshape(
             s, n, -1, 2))
-        freqs_i = freqs[i, :s]
+        freqs_i = freqs[i, :s] if hasattr(freqs, 'shape') and freqs.dim() >= 2 else freqs
         # apply rotary embedding
         x_i = torch.view_as_real(x_i * freqs_i).flatten(2)
         x_i = torch.cat([x_i, x[i, s:]])
@@ -78,6 +78,7 @@ def rope_apply(x, grid_sizes, freqs, start=None):
         output.append(x_i)
     return torch.stack(output).float()
 
+@amp.autocast(enabled=False)
 @amp.autocast(enabled=False)
 @conditional_compile
 def rope_apply_cond(x, grid_sizes, freqs, start=None):
@@ -92,7 +93,7 @@ def rope_apply_cond(x, grid_sizes, freqs, start=None):
         s = x.size(1)
         x_i = torch.view_as_complex(x[i, :s].to(torch.float64).reshape(
             s, n, -1, 2))
-        freqs_i = freqs[i, :s]
+        freqs_i = freqs[i, :s] if hasattr(freqs, 'shape') and freqs.dim() >= 2 else freqs
         # apply rotary embedding
         x_i = torch.view_as_real(x_i * freqs_i).flatten(2)
         x_i = torch.cat([x_i, x[i, s:]])
