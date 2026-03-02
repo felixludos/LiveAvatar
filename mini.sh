@@ -11,9 +11,9 @@ CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES torchrun --nproc_per_node=1 --master_
      --training_config liveavatar/configs/s2v_causal_sft.yaml \
      --offload_model True \
      --convert_model_dtype \
-     --prompt "A stout, cheerful dwarf with a magnificent braided beard adorned with metal rings, wearing a heavy leather apron. He's standing in his fiery, cluttered forge, laughing heartily as he explains the mastery of his craft, holding up a glowing hammer. Style of Blizzard Entertainment cinematics (like World of Warcraft), warm, dynamic lighting from the forge."  \
-     --image "examples/dwarven_blacksmith.jpg" \
-     --audio "examples/dwarven_blacksmith.wav" \
+     --prompt "A professional speaks confidently directly to the camera." \
+     --image "/mnt/c/Users/anwan/OneDrive/Khan/maity/vidLink/local_data/avatars/sales_executive/executive.png" \
+     --audio "/mnt/c/Users/anwan/OneDrive/Khan/maity/vidLink/video_generators/multitalk/local_data/sales_test/executive/s1.wav" \
      --infer_frames 48 \
      --load_lora \
      --lora_path_dmd "Quark-Vision/Live-Avatar" \
