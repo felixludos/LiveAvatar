@@ -42,7 +42,6 @@ IMAGE="/mnt/c/Users/anwan/OneDrive/Khan/maity/vidLink/local_data/avatars/greensc
 AUDIO="/mnt/c/Users/anwan/OneDrive/Khan/maity/vidLink/video_generators/multitalk/local_data/sales_test/green_woman4/s1.wav"
 PROMPT="A professional speaks confidently directly to the camera."
 
-
 CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES torchrun --nproc_per_node=1 --master_port=29101  minimal_inference/s2v_streaming_interact.py \
      --ulysses_size 1 \
      --task s2v-14B \
