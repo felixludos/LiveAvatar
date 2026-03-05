@@ -601,10 +601,15 @@ class WanS2V:
             HEIGHT, WIDTH, target_area=max_area)
         return (HEIGHT, WIDTH)
 
-    def _initialize_kv_cache(self, batch_size, dtype, device, gpu_id, kv_cache_size=13500):
+    def _initialize_kv_cache(self, batch_size, dtype, device, cache_idx, kv_cache_size=13500):
         """
-        Initialize a Per-GPU KV cache for the Wan model.
-        gpu_id : "1","2","3","4"
+        Initialize a KV cache for one diffusion sampling step.
+        In diffusion models, we maintain separate KV caches for each sampling step to allow
+        offloading and avoid recomputation.
+        
+        Args:
+            cache_idx: Cache index (1 to sampling_steps), used as key in self.kv_cache1 dict
+            device: Physical location where this cache is stored (cuda:0, cuda:1, or cpu)
         """
         device =("cpu" if self.offload_kv_cache else f"cuda:{0}")  if self.single_gpu else device
         kv_cache1 = []
@@ -626,7 +631,7 @@ class WanS2V:
             
             kv_cache1.append(layer_cache)
 
-        self.kv_cache1[str(gpu_id)] = kv_cache1  # always store the clean cache
+        self.kv_cache1[str(cache_idx)] = kv_cache1  # Store with cache index as key
     
     def _move_kv_cache_to_working_gpu(self,moved_id, gpu_id=0):
         """
@@ -981,14 +986,23 @@ class WanS2V:
                     else:
                         self.shared_cond_cache = None
                     
-                    for gpu_id in range(4):
+                    # Initialize KV caches based on timesteps that scheduler produces (not just the sampling_steps parameter)
+                    # This allows robustness if scheduler adjusts the number of steps
+                    sample_scheduler.set_timesteps(sampling_steps, device=self.device)
+                    num_timesteps = len(sample_scheduler.timesteps)
+                    
+                    for cache_idx in range(num_timesteps):
                         self._initialize_kv_cache(
                             batch_size=1,
                             dtype=self.param_dtype,
-                            device=f"cuda:{gpu_id+1}",
-                            gpu_id=gpu_id+1,
+                            device=f"cuda:{cache_idx+1}" if not self.single_gpu else ("cpu" if self.offload_kv_cache else self.device),
+                            cache_idx=cache_idx+1,
                             kv_cache_size=max_seq_len
                         )
+                    
+                    # Cache the timesteps and sigmas to avoid recomputation
+                    self._sampler_timesteps = sample_scheduler.timesteps
+                    self._sampler_sigmas = sample_scheduler.sigmas
 
                     self._initialize_crossattn_cache(
                         batch_size=1,
@@ -1016,8 +1030,9 @@ class WanS2V:
                 #-----------------------------------------------Temporal denoising loop in single clip---------------------------------
                 # 2.2.0 prefill cond caching
                 if r==0 or (r==1 and enable_online_decode):
-                    for gpu_id in range(4):
-                        self._move_kv_cache_to_working_gpu(gpu_id+1) # move to gpu0
+                    num_timesteps = len(self._sampler_timesteps)
+                    for cache_idx in range(num_timesteps):
+                        self._move_kv_cache_to_working_gpu(cache_idx+1) # move to working device
 
                         block_index = 0
                         block_latents = clip_latents[0][:, block_index *
@@ -1040,11 +1055,11 @@ class WanS2V:
                             [1, self.num_frames_per_block], device=self.device, dtype=self.param_dtype) * 0
                         self.noise_model( #update clean kv cache
                             [block_latents], t=timestep*0, **block_arg_c, 
-                            kv_cache=self.kv_cache1[str(gpu_id+1)], crossattn_cache=self.crossattn_cache,
+                            kv_cache=self.kv_cache1[str(cache_idx+1)], crossattn_cache=self.crossattn_cache,
                             current_start=block_index * self.num_frames_per_block * frame_seq_length,
                             current_end=(block_index + 1) * self.num_frames_per_block * frame_seq_length)
                         
-                        self._move_kv_cache_to_working_gpu(gpu_id+1, gpu_id+1) # move to gpu0
+                        self._move_kv_cache_to_working_gpu(cache_idx+1, cache_idx+1) # move to offload device
 
 
                 num_blocks = target_shape[0] // self.num_frames_per_block
@@ -1083,16 +1098,17 @@ class WanS2V:
                         timestep = [t] * self.num_frames_per_block
                         timestep = torch.tensor(timestep).to(self.device).unsqueeze(0)
 
-                        self._move_kv_cache_to_working_gpu(i+1)# i+1 gpu -> 0
+                        cache_idx = (i % len(timesteps)) + 1
+                        self._move_kv_cache_to_working_gpu(cache_idx)# cache_idx gpu -> 0
                         noise_pred_cond = self.noise_model(
                             [latent_model_input], t=timestep, **block_arg_c, 
-                            kv_cache=self.kv_cache1[str(i+1)], crossattn_cache=self.crossattn_cache,
+                            kv_cache=self.kv_cache1[str(cache_idx)], crossattn_cache=self.crossattn_cache,
                             current_start=block_index * self.num_frames_per_block * frame_seq_length + r * num_blocks * self.num_frames_per_block * frame_seq_length,
                             current_end=(block_index + 1) * self.num_frames_per_block * frame_seq_length + r * num_blocks *self.num_frames_per_block * frame_seq_length,
                             mask=mask)
 
                         noise_pred = [torch.cat(noise_pred_cond, dim=0)]
-                        self._move_kv_cache_to_working_gpu(i+1,i+1)# i+1 gpu -> 0
+                        self._move_kv_cache_to_working_gpu(cache_idx, cache_idx)# cache_idx gpu -> 0
                         temp_x0 = sample_scheduler.step(
                             noise_pred[0].unsqueeze(0),# [16,f,h,w]
                             t,
