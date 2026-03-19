@@ -42,3 +42,4 @@ sam2
 insightface
 opencv-python
 gradio
+-e git+https://github.com/felixludos/lingo.git#egg=lingo
