@@ -1,2 +1,3 @@
 [celery]
+app = "lingo_video_worker"
 name = "liveavatar@%h"
