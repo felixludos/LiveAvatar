@@ -1,7 +1,7 @@
 
 
 ```sh
-celery -A lingo_video_worker:app worker -l info -P solo -n liveavatar@%h
+lingo test lingo_video_worker.py
 
-lingo launch --local -A lingo_video_worker:app worker -l info -P solo
+lingo launch lingo_video_worker:lang
 ```
